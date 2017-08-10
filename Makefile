@@ -1,5 +1,5 @@
-IMAGE_NAME ?= localstack/localstack
-IMAGE_NAME_BASE ?= localstack/java-maven-node-python
+IMAGE_NAME ?= umpg/localstack
+IMAGE_NAME_BASE ?= umpg/java-maven-node-python
 IMAGE_TAG ?= $(shell cat localstack/constants.py | grep '^VERSION =' | sed "s/VERSION = ['\"]\(.*\)['\"].*/\1/")
 VENV_DIR ?= .venv
 VENV_RUN = . $(VENV_DIR)/bin/activate

@@ -1,6 +1,8 @@
 package cloud.localstack;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.PrintWriter;
 import java.nio.ByteBuffer;
 import java.util.Date;
 import java.util.LinkedList;
@@ -12,6 +14,7 @@ import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.KinesisEvent;
 import com.amazonaws.services.lambda.runtime.events.KinesisEvent.KinesisEventRecord;
 import com.amazonaws.services.lambda.runtime.events.KinesisEvent.Record;
+import com.amazonaws.services.s3.internal.MultiFileOutputStream;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.codec.Charsets;
 import org.apache.commons.io.FileUtils;
@@ -32,7 +35,14 @@ public class LambdaExecutor {
 			System.exit(1);
 		}
 
+		File logFile = new File("/tmp/simon.text");
+		FileOutputStream fos = new FileOutputStream(logFile);
+        PrintWriter pw = new PrintWriter(fos);
+
+		pw.println("program arguments SJR: " + args[0] + ", " + args[1]);
+
 		String fileContent = readFile(args[1]);
+		pw.println("file Contents: " +  fileContent);
 		ObjectMapper reader = new ObjectMapper();
 		@SuppressWarnings("deprecation")
 		Map<String,Object> map = reader.reader(Map.class).readValue(fileContent);
