@@ -187,7 +187,7 @@ If you want to use *LocalStack* in your integration tests (e.g., nosetests), sim
 infrastructure in your test setup method and then clean up everything in your teardown method:
 
 ```
-from localstack.mock import infra
+from localstack.services import infra
 
 def setup():
     infra.start_infra(async=True)
@@ -295,6 +295,7 @@ localstack web
 
 ## Change Log
 
+* v0.7.4: Refactor CLI and enable plugins; support unicode names for S3; fix SQS names containing a dot character; execute Java Lambda functions in Docker containers; fix DynamoDB error handling; update docs
 * v0.7.3: Extract proxy listeners into (sub-)classes; put java libs into a single "fat" jar; fix issue with non-daemonized threads; refactor code to start flask services
 * v0.7.2: Fix DATA_DIR config when running in Docker; fix Maven dependencies; return 'ConsumedCapacity' from DynamoDB get-item; use Queue ARN instead of URL for S3 bucket notifications
 * v0.7.1: Fix S3 API to GET bucket notifications; release Java artifacts to Maven Central; fix S3 file access from Spark; create DDB stream on UpdateTable; remove AUI dependency, optimize size of Docker image

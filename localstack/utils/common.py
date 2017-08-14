@@ -218,6 +218,22 @@ def md5(string):
     return m.hexdigest()
 
 
+def in_ci():
+    """ Whether or not we are running in a CI environment """
+    for key in ('CI', 'TRAVIS'):
+        if os.environ.get(key, '') not in [False, '', '0', 'false']:
+            return True
+    return False
+
+
+def in_docker():
+    """ Returns: True if running in a docker container, else False """
+    if not os.path.exists('/proc/1/cgroup'):
+        return False
+    with open('/proc/1/cgroup', 'rt') as ifh:
+        return 'docker' in ifh.read()
+
+
 def is_port_open(port_or_url):
     port = port_or_url
     host = '127.0.0.1'
@@ -323,8 +339,11 @@ def download(url, path):
     r = requests.get(url, stream=True)
     try:
         with open(path, 'wb') as f:
-            for chunk in r.iter_content(2048):
-                f.write(chunk)
+            for chunk in r.iter_content(4096):
+                if chunk:  # filter out keep-alive new chunks
+                    f.write(chunk)
+                    f.flush()
+                    os.fsync(f)
     finally:
         r.close()
 
@@ -390,6 +409,14 @@ def cleanup_tmp_files():
         except Exception as e:
             pass  # file likely doesn't exist, or permission denied
     del TMP_FILES[:]
+
+
+def is_ip_address(addr):
+    try:
+        socket.inet_aton(addr)
+        return True
+    except socket.error:
+        return False
 
 
 def is_zip_file(content):
@@ -557,8 +584,9 @@ class NetrcBypassAuth(requests.auth.AuthBase):
 
 
 class _RequestsSafe(type):
-    """ Wrapper around requests library, which prevents it from verifying
-        SSL certificates or reading credentials from ~/.netrc file """
+    """ Wrapper around requests library, which can prevent it from verifying
+    SSL certificates or reading credentials from ~/.netrc file """
+    verify_ssl = True
 
     def __getattr__(self, name):
         method = requests.__dict__.get(name.lower())
@@ -568,7 +596,7 @@ class _RequestsSafe(type):
         def _missing(*args, **kwargs):
             if 'auth' not in kwargs:
                 kwargs['auth'] = NetrcBypassAuth()
-            if 'verify' not in kwargs:
+            if not self.verify_ssl and args[0].startswith('https://') and 'verify' not in kwargs:
                 kwargs['verify'] = False
             return method(*args, **kwargs)
         return _missing
