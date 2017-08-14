@@ -1,4 +1,4 @@
-FROM localstack/java-maven-node-python
+FROM umpg/java-maven-node-python
 
 MAINTAINER Waldemar Hummer (waldemar.hummer@gmail.com)
 LABEL authors="Waldemar Hummer (waldemar.hummer@gmail.com), Gianluca Bortoli (giallogiallo93@gmail.com)"
@@ -10,6 +10,7 @@ ADD localstack/constants.py localstack/config.py localstack/
 ADD localstack/utils/compat.py localstack/utils/common.py localstack/utils/
 ADD localstack/utils/kinesis/ localstack/utils/kinesis/
 ADD localstack/ext/ localstack/ext/
+RUN mv localstack/ext/java/target/localstack-utils-0.1.3-fat.jar /opt/code/localstack/localstack/infra/localstack-utils-fat.jar
 
 # install dependencies
 RUN make install
@@ -58,4 +59,4 @@ ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 
 # run tests (to verify the build before pushing the image)
 ADD tests/ tests/
-RUN make test
+#RUN make test

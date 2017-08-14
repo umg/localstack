@@ -428,6 +428,7 @@ def set_function_code(code, lambda_name):
             class_name = lambda_arn_to_handler[arn].split('::')[0]
             classpath = '%s:%s' % (LAMBDA_EXECUTOR_JAR, main_file)
             cmd = 'java -cp %s %s %s %s' % (classpath, LAMBDA_EXECUTOR_CLASS, class_name, event_file)
+            LOG.warning('Lambda cmd: %s' % cmd)
             result, log_output = run_lambda_executor(cmd)
             LOG.info('Lambda output: %s' % log_output.replace('\n', '\n> '))
             return result

@@ -3,6 +3,7 @@ package cloud.localstack;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintWriter;
+import java.lang.reflect.ParameterizedType;
 import java.nio.ByteBuffer;
 import java.util.Date;
 import java.util.LinkedList;
@@ -14,11 +15,15 @@ import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.KinesisEvent;
 import com.amazonaws.services.lambda.runtime.events.KinesisEvent.KinesisEventRecord;
 import com.amazonaws.services.lambda.runtime.events.KinesisEvent.Record;
+import com.amazonaws.services.lambda.runtime.events.SNSEvent;
 import com.amazonaws.services.s3.internal.MultiFileOutputStream;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.joda.JodaModule;
 import org.apache.commons.codec.Charsets;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+
+import static com.fasterxml.jackson.databind.MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES;
 
 /**
  * Simple implementation of a Java Lambda function executor.
@@ -27,77 +32,62 @@ import org.apache.commons.lang3.StringUtils;
  */
 public class LambdaExecutor {
 
-	@SuppressWarnings("unchecked")
-	public static void main(String[] args) throws Exception {
-		if(args.length < 2) {
-			System.err.println("Usage: java " + LambdaExecutor.class.getSimpleName() +
-					" <lambdaClass> <recordsFilePath>");
-			System.exit(1);
-		}
+    @SuppressWarnings("unchecked")
+    public static void main(String[] args) throws Exception {
+        if (args.length < 2) {
+            System.err.println("Usage: java " + LambdaExecutor.class.getSimpleName() +
+                    " <lambdaClass> <recordsFilePath>");
+            System.exit(1);
+        }
 
-		File logFile = new File("/tmp/simon.text");
-		FileOutputStream fos = new FileOutputStream(logFile);
-        PrintWriter pw = new PrintWriter(fos);
 
-		pw.println("program arguments SJR: " + args[0] + ", " + args[1]);
+        String fileContent = readFile(args[1]);
 
-		String fileContent = readFile(args[1]);
-		pw.println("file Contents: " +  fileContent);
-		ObjectMapper reader = new ObjectMapper();
-		@SuppressWarnings("deprecation")
-		Map<String,Object> map = reader.reader(Map.class).readValue(fileContent);
+        ObjectMapper reader = new ObjectMapper();
+        reader.registerModule(new JodaModule());
+        reader.configure(ACCEPT_CASE_INSENSITIVE_PROPERTIES, true);
 
-		List<Map<String,Object>> records = (List<Map<String, Object>>) get(map, "Records");
-		@SuppressWarnings("rawtypes")
-		RequestHandler handler;
-		Object event;
+        String handlerClassName = args[0];
+        @SuppressWarnings("rawtypes")
+        RequestHandler handler = ((Class<RequestHandler<?, ?>>) Class.forName(handlerClassName)).newInstance();
+        Object event = mapEventFileToObject(fileContent, reader);
 
-		if (records != null) {
-			Class<RequestHandler<KinesisEvent, ?>> clazz = (Class<RequestHandler<KinesisEvent, ?>>) Class.forName(args[0]);
-			handler = clazz.newInstance();
-			KinesisEvent kinesisEvent = new KinesisEvent();
-			event = kinesisEvent;
-			kinesisEvent.setRecords(new LinkedList<>());
-			for(Map<String,Object> record : records) {
-				KinesisEventRecord r = new KinesisEventRecord();
-				kinesisEvent.getRecords().add(r);
-				Record kinesisRecord = new Record();
-				Map<String,Object> kinesis = (Map<String, Object>) get(record, "Kinesis");
-				kinesisRecord.setData(ByteBuffer.wrap(get(kinesis, "Data").toString().getBytes()));
-				kinesisRecord.setPartitionKey((String) get(kinesis, "PartitionKey"));
-				kinesisRecord.setApproximateArrivalTimestamp(new Date());
-				r.setKinesis(kinesisRecord);
-			}
-		} else {
-			Class<RequestHandler<?, ?>> clazz = (Class<RequestHandler<?, ?>>) Class.forName(args[0]);
-			handler = clazz.newInstance();
-			event = map;
-		}
 
-		Context ctx = new LambdaContext();
-		Object result = handler.handleRequest(event, ctx);
-		// The contract with lambci is to print the result to stdout, whereas logs go to stderr
-		System.out.println(result);
-	}
+        Context ctx = new LambdaContext();
+        Object result = handler.handleRequest(event, ctx);
+        // The contract with lambci is to print the result to stdout, whereas logs go to stderr
+        System.out.println(result);
+    }
 
-	private static <T> T get(Map<String,T> map, String key) {
-		T result = map.get(key);
-		if(result != null) {
-			return result;
-		}
-		key = StringUtils.uncapitalize(key);
-		result = map.get(key);
-		if(result != null) {
-			return result;
-		}
-		return map.get(key.toLowerCase());
-	}
+    @SuppressWarnings("deprecation")
+    private static Object mapEventFileToObject(String messageContents, ObjectMapper mapper) throws Exception {
+        if (messageContents.contains("\"Sns\"")) {
+            return mapper.reader(SNSEvent.class).readValue(messageContents);
+        } else if (messageContents.contains("\"Kinesis\"")) {
+            return mapper.reader(KinesisEvent.class).readValue(messageContents);
+        }
 
-	private static String readFile(String file) throws Exception {
-		if(!file.startsWith("/")) {
-			file = System.getProperty("user.dir") + "/" + file;
-		}
-		return FileUtils.readFileToString(new File(file), Charsets.UTF_8);
-	}
+        throw new UnsupportedOperationException("Given event is neither an SNSEvent or a KinesisEvent");
+    }
+
+    private static <T> T get(Map<String, T> map, String key) {
+        T result = map.get(key);
+        if (result != null) {
+            return result;
+        }
+        key = StringUtils.uncapitalize(key);
+        result = map.get(key);
+        if (result != null) {
+            return result;
+        }
+        return map.get(key.toLowerCase());
+    }
+
+    private static String readFile(String file) throws Exception {
+        if (!file.startsWith("/")) {
+            file = System.getProperty("user.dir") + "/" + file;
+        }
+        return FileUtils.readFileToString(new File(file), Charsets.UTF_8);
+    }
 
 }
