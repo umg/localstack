@@ -59,6 +59,7 @@ lambda_arn_to_function = {}
 lambda_arn_to_cwd = {}
 lambda_arn_to_handler = {}
 lambda_arn_to_runtime = {}
+lambda_arn_to_env_vars= {}
 
 # list of event source mappings for the API
 event_source_mappings = []
@@ -80,6 +81,7 @@ def cleanup():
     lambda_arn_to_cwd = {}
     lambda_arn_to_handler = {}
     lambda_arn_to_runtime = {}
+    lambda_arn_to_env_vars = {}
     event_source_mappings = []
 
 
@@ -429,7 +431,7 @@ def set_function_code(code, lambda_name):
             classpath = '%s:%s' % (LAMBDA_EXECUTOR_JAR, main_file)
             cmd = 'java -cp %s %s %s %s' % (classpath, LAMBDA_EXECUTOR_CLASS, class_name, event_file)
             LOG.warning('Lambda cmd: %s' % cmd)
-            result, log_output = run_lambda_executor(cmd)
+            result, log_output = run_lambda_executor(cmd, lambda_arn_to_env_vars[arn]['Variables'])
             LOG.info('Lambda output: %s' % log_output.replace('\n', '\n> '))
             return result
 
@@ -487,6 +489,7 @@ def create_function():
                 lambda_name, 409, error_type='ResourceConflictException')
         lambda_arn_to_handler[arn] = data['Handler']
         lambda_arn_to_runtime[arn] = data['Runtime']
+        lambda_arn_to_env_vars[arn] = data['Environment']
         result = set_function_code(data['Code'], lambda_name)
         return result or jsonify({})
     except Exception as e:
@@ -611,6 +614,8 @@ def update_function_configuration(function):
         lambda_arn_to_handler[arn] = data['Handler']
     if data.get('Runtime'):
         lambda_arn_to_runtime[arn] = data['Runtime']
+    if data.get('Environment'):
+        lambda_arn_to_env_vars[arn] = data['Environment']
     result = {}
     return jsonify(result)
 

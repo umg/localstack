@@ -9,6 +9,8 @@ import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.LogManager;
+import java.util.logging.Logger;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
@@ -34,12 +36,16 @@ public class LambdaExecutor {
 
     @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
+
         if (args.length < 2) {
             System.err.println("Usage: java " + LambdaExecutor.class.getSimpleName() +
                     " <lambdaClass> <recordsFilePath>");
             System.exit(1);
         }
-
+        //switch off all logging
+        LogManager.getLogManager().reset();
+        Logger globalLogger = Logger.getLogger(java.util.logging.Logger.GLOBAL_LOGGER_NAME);
+        globalLogger.setLevel(java.util.logging.Level.OFF);
 
         String fileContent = readFile(args[1]);
 
