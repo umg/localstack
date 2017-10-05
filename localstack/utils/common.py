@@ -3,6 +3,7 @@ from __future__ import print_function
 import threading
 import traceback
 import os
+import sys
 import hashlib
 import uuid
 import time
@@ -16,6 +17,7 @@ import decimal
 import logging
 import tempfile
 import requests
+import zipfile
 from io import BytesIO
 from contextlib import closing
 from datetime import datetime
@@ -23,9 +25,9 @@ from six.moves.urllib.parse import urlparse
 from six.moves import cStringIO as StringIO
 from six import with_metaclass
 from multiprocessing.dummy import Pool
-from localstack.utils.compat import bytes_
-from localstack.constants import *
+from localstack.constants import ENV_DEV
 from localstack.config import DEFAULT_ENCODING
+from localstack import config
 
 # arrays for temporary files and resources
 TMP_FILES = []
@@ -42,6 +44,10 @@ mutex_popen = threading.Semaphore(1)
 # misc. constants
 TIMESTAMP_FORMAT = '%Y-%m-%dT%H:%M:%S'
 TIMESTAMP_FORMAT_MILLIS = '%Y-%m-%dT%H:%M:%S.%fZ'
+CODEC_HANDLER_UNDERSCORE = 'underscore'
+
+# chunk size for file downloads
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 # set up logger
 LOGGER = logging.getLogger(__name__)
@@ -73,14 +79,14 @@ class FuncThread (threading.Thread):
     def run(self):
         try:
             self.func(self.params)
-        except Exception as e:
+        except Exception:
             if not self.quiet:
-                LOGGER.warning("Thread run method %s(%s) failed: %s" %
+                LOGGER.warning('Thread run method %s(%s) failed: %s' %
                     (self.func, self.params, traceback.format_exc()))
 
     def stop(self, quiet=False):
         if not quiet and not self.quiet:
-            LOGGER.warning("Not implemented: FuncThread.stop(..)")
+            LOGGER.warning('Not implemented: FuncThread.stop(..)')
 
 
 class ShellCommandThread (FuncThread):
@@ -153,9 +159,9 @@ class ShellCommandThread (FuncThread):
                 child.kill()
             parent.kill()
             self.process = None
-        except Exception as e:
+        except Exception:
             if not quiet:
-                LOGGER.warning('Unable to kill process with pid %s' % pid)
+                LOGGER.warning('Unable to kill process with pid %s' % parent_pid)
 
 
 # Generic JSON serializable object for simplified subclassing
@@ -214,7 +220,7 @@ def is_string(s, include_unicode=True):
 
 def md5(string):
     m = hashlib.md5()
-    m.update(bytes_(string))
+    m.update(to_bytes(string))
     return m.hexdigest()
 
 
@@ -227,11 +233,7 @@ def in_ci():
 
 
 def in_docker():
-    """ Returns: True if running in a docker container, else False """
-    if not os.path.exists('/proc/1/cgroup'):
-        return False
-    with open('/proc/1/cgroup', 'rt') as ifh:
-        return 'docker' in ifh.read()
+    return config.in_docker()
 
 
 def is_port_open(port_or_url):
@@ -334,18 +336,31 @@ def cp_r(src, dst):
         shutil.copytree(src, dst)
 
 
-def download(url, path):
+def download(url, path, verify_ssl=True):
     """Downloads file at url to the given path"""
-    r = requests.get(url, stream=True)
+    # make sure we're creating a new session here to
+    # enable parallel file downloads during installation!
+    s = requests.Session()
+    r = s.get(url, stream=True, verify=verify_ssl)
+    total = 0
     try:
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path))
+        LOGGER.debug('Starting download from %s to %s (%s bytes)' % (url, path, r.headers.get('content-length')))
         with open(path, 'wb') as f:
-            for chunk in r.iter_content(4096):
+            for chunk in r.iter_content(DOWNLOAD_CHUNK_SIZE):
+                total += len(chunk)
                 if chunk:  # filter out keep-alive new chunks
                     f.write(chunk)
-                    f.flush()
-                    os.fsync(f)
+                    LOGGER.debug('Writing %s bytes (total %s) to %s' % (len(chunk), total, path))
+                else:
+                    LOGGER.debug('Empty chunk %s (total %s) from %s' % (chunk, total, url))
+            f.flush()
+            os.fsync(f)
     finally:
+        LOGGER.debug('Done downloading %s, response code %s' % (url, r.status_code))
         r.close()
+        s.close()
 
 
 def short_uid():
@@ -353,7 +368,26 @@ def short_uid():
 
 
 def json_safe(item):
-    return json.loads(json.dumps(item, cls=CustomEncoder))
+    """ return a copy of the given object (e.g., dict) that is safe for JSON dumping """
+    try:
+        return json.loads(json.dumps(item, cls=CustomEncoder))
+    except:
+        item = fix_json_keys(item)
+        return json.loads(json.dumps(item, cls=CustomEncoder))
+
+
+def fix_json_keys(item):
+    """ make sure the keys of a JSON are strings (not binary type or other) """
+    item_copy = item
+    if isinstance(item, list):
+        item_copy = []
+        for i in item:
+            item_copy.append(fix_json_keys(i))
+    if isinstance(item, dict):
+        item_copy = {}
+        for k, v in item.items():
+            item_copy[to_str(k)] = fix_json_keys(v)
+    return item_copy
 
 
 def save_file(file, content, append=False):
@@ -375,18 +409,18 @@ def load_file(file_path, default=None, mode=None):
     return result
 
 
-def to_str(obj):
-    """ Convert a string/bytes object to a string """
-    if not obj or isinstance(obj, six.string_types):
-        return obj
-    return obj.decode(DEFAULT_ENCODING)
+def to_str(obj, encoding=DEFAULT_ENCODING, errors='strict'):
+    """If ``obj`` is an instance of ``binary_type``, return
+    ``obj.decode(encoding, errors)``, otherwise return ``obj``
+    """
+    return obj.decode(encoding, errors) if isinstance(obj, six.binary_type) else obj
 
 
-def to_bytes(obj):
-    """ Convert a string/bytes object to bytes """
-    if not isinstance(obj, six.string_types):
-        return obj
-    return obj.encode(DEFAULT_ENCODING)
+def to_bytes(obj, encoding=DEFAULT_ENCODING, errors='strict'):
+    """ If ``obj`` is an instance of ``text_type``, return
+    ``obj.encode(encoding, errors)``, otherwise return ``obj``
+    """
+    return obj.encode(encoding, errors) if isinstance(obj, six.text_type) else obj
 
 
 def cleanup(files=True, env=ENV_DEV, quiet=True):
@@ -406,7 +440,7 @@ def cleanup_tmp_files():
                 run('rm -rf "%s"' % tmp)
             else:
                 os.remove(tmp)
-        except Exception as e:
+        except Exception:
             pass  # file likely doesn't exist, or permission denied
     del TMP_FILES[:]
 
@@ -420,16 +454,25 @@ def is_ip_address(addr):
 
 
 def is_zip_file(content):
-    import zipfile
     stream = BytesIO(content)
     return zipfile.is_zipfile(stream)
+
+
+def unzip(path, target_dir):
+    try:
+        zip_ref = zipfile.ZipFile(path, 'r')
+    except Exception as e:
+        LOGGER.warning('Unable to open zip file: %s: %s' % (path, e))
+        raise e
+    zip_ref.extractall(target_dir)
+    zip_ref.close()
 
 
 def is_jar_archive(content):
     # TODO Simple stupid heuristic to determine whether a file is a JAR archive
     try:
         return 'class' in content and 'META-INF' in content
-    except TypeError as e:
+    except TypeError:
         # in Python 3 we need to use byte strings for byte-based file content
         return b'class' in content and b'META-INF' in content
 
@@ -463,12 +506,12 @@ def generate_ssl_cert(target_file=None, overwrite=False, random=False):
 
     # create a self-signed cert
     cert = crypto.X509()
-    cert.get_subject().C = "AU"
-    cert.get_subject().ST = "Some-State"
-    cert.get_subject().L = "Some-Locality"
-    cert.get_subject().O = "LocalStack Org"
-    cert.get_subject().OU = "Testing"
-    cert.get_subject().CN = "LocalStack"
+    cert.get_subject().C = 'AU'
+    cert.get_subject().ST = 'Some-State'
+    cert.get_subject().L = 'Some-Locality'
+    cert.get_subject().O = 'LocalStack Org'
+    cert.get_subject().OU = 'Testing'
+    cert.get_subject().CN = 'LocalStack'
     cert.set_serial_number(1000)
     cert.gmtime_adj_notBefore(0)
     cert.gmtime_adj_notAfter(10 * 365 * 24 * 60 * 60)
@@ -504,6 +547,10 @@ def run_safe(_python_lambda, print_error=True, **kwargs):
     except Exception as e:
         if print_error:
             print('Unable to execute function: %s' % e)
+
+
+def run_cmd_safe(**kwargs):
+    return run_safe(run, print_error=False, **kwargs)
 
 
 def run(cmd, cache_duration_secs=0, print_error=True, async=False, stdin=False,
@@ -593,13 +640,13 @@ class _RequestsSafe(type):
         if not method:
             return method
 
-        def _missing(*args, **kwargs):
+        def _wrapper(*args, **kwargs):
             if 'auth' not in kwargs:
                 kwargs['auth'] = NetrcBypassAuth()
             if not self.verify_ssl and args[0].startswith('https://') and 'verify' not in kwargs:
                 kwargs['verify'] = False
             return method(*args, **kwargs)
-        return _missing
+        return _wrapper
 
 
 # create class-of-a-class

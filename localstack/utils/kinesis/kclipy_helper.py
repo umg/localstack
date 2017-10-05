@@ -1,15 +1,11 @@
 #!/usr/bin/env python
 
 from __future__ import print_function
-from amazon_kclpy import kcl
-from glob import glob
-from localstack.utils.common import save_file, run
 import os
-import argparse
-import sys
-import samples
-import traceback
+from glob import glob
 from six import iteritems
+from amazon_kclpy import kcl
+from localstack.utils.common import save_file
 
 
 def get_dir_of_file(f):
@@ -26,7 +22,7 @@ def get_kcl_jar_path():
 
 
 def get_kcl_classpath(properties=None, paths=[]):
-    '''
+    """
     Generates a classpath that includes the location of the kcl jars, the
     properties file and the optional paths.
 
@@ -40,7 +36,7 @@ def get_kcl_classpath(properties=None, paths=[]):
     :return: A java class path that will allow your properties to be
              found and the MultiLangDaemon and its deps and
         any custom paths you provided.
-    '''
+    """
     # First make all the user provided paths absolute
     paths = [os.path.abspath(p) for p in paths]
     # We add our paths after the user provided paths because this permits users to
@@ -56,11 +52,11 @@ def get_kcl_classpath(properties=None, paths=[]):
     paths.append(os.path.realpath(os.path.join(dir_name, 'java')))
     paths.insert(0, os.path.realpath(os.path.join(dir_name, '..', '..',
             'infra', 'amazon-kinesis-client', 'aws-java-sdk-sts.jar')))
-    return ":".join([p for p in paths if p != ''])
+    return ':'.join([p for p in paths if p != ''])
 
 
 def get_kcl_app_command(java, multi_lang_daemon_class, properties, paths=[]):
-    '''
+    """
     Generates a command to run the MultiLangDaemon.
 
     :type java: str
@@ -79,8 +75,8 @@ def get_kcl_app_command(java, multi_lang_daemon_class, properties, paths=[]):
     :rtype: str
     :return: A command that will run the MultiLangDaemon with your
              properties and custom paths and java.
-    '''
-    return "{java} -cp {cp} {daemon} {props}".format(
+    """
+    return '{java} -cp {cp} {daemon} {props}'.format(
         java=java,
         cp=get_kcl_classpath(properties, paths),
         daemon=multi_lang_daemon_class,

@@ -1,10 +1,14 @@
-from localstack.services.infra import *
+from localstack.services.infra import (register_plugin, Plugin,
+    start_s3, start_sns, start_ses, start_apigateway,
+    start_elasticsearch_service, start_lambda, start_redshift, start_firehose,
+    start_cloudwatch, start_cloudformation, start_dynamodbstreams, start_route53,
+    start_ssm)
 from localstack.services.apigateway import apigateway_listener
 from localstack.services.cloudformation import cloudformation_listener
 from localstack.services.dynamodb import dynamodb_listener, dynamodb_starter
 from localstack.services.kinesis import kinesis_listener, kinesis_starter
 from localstack.services.sns import sns_listener
-from localstack.services.sqs import sqs_listener
+from localstack.services.sqs import sqs_listener, sqs_starter
 from localstack.services.s3 import s3_listener, s3_starter
 from localstack.services.es import es_starter
 
@@ -26,10 +30,12 @@ def register_localstack_plugins():
             start=start_sns,
             listener=sns_listener.UPDATE_SNS))
         register_plugin(Plugin('sqs',
-            start=start_sqs,
+            start=sqs_starter.start_sqs,
             listener=sqs_listener.UPDATE_SQS))
         register_plugin(Plugin('ses',
             start=start_ses))
+        register_plugin(Plugin('ssm',
+            start=start_ssm))
         register_plugin(Plugin('apigateway',
             start=start_apigateway,
             listener=apigateway_listener.UPDATE_APIGATEWAY))

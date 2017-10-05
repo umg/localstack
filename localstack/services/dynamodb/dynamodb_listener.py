@@ -5,9 +5,9 @@ from binascii import crc32
 from requests.models import Response
 from localstack import config
 from localstack.utils.aws import aws_stack
-from localstack.utils.common import *
+from localstack.utils.common import to_bytes, to_str, clone
 from localstack.utils.analytics import event_publisher
-from localstack.constants import *
+from localstack.constants import DEFAULT_REGION
 from localstack.services.awslambda import lambda_api
 from localstack.services.dynamodbstreams import dynamodbstreams_api
 from localstack.services.generic_proxy import ProxyListener
@@ -38,17 +38,16 @@ class ProxyListenerDynamoDB(ProxyListener):
         if not action:
             return
 
-        response_data = json.loads(to_str(response.content))
         record = {
-            "eventID": "1",
-            "eventVersion": "1.0",
-            "dynamodb": {
-                "StreamViewType": "NEW_AND_OLD_IMAGES",
-                "SequenceNumber": "1",
-                "SizeBytes": -1
+            'eventID': '1',
+            'eventVersion': '1.0',
+            'dynamodb': {
+                'StreamViewType': 'NEW_AND_OLD_IMAGES',
+                'SequenceNumber': '1',
+                'SizeBytes': -1
             },
-            "awsRegion": DEFAULT_REGION,
-            "eventSource": "aws:dynamodb"
+            'awsRegion': DEFAULT_REGION,
+            'eventSource': 'aws:dynamodb'
         }
         records = [record]
 
@@ -153,7 +152,7 @@ def forward_to_lambda(records):
             'Records': [record]
         }
         for src in sources:
-            func_to_call = lambda_api.lambda_arn_to_function[src['FunctionArn']]
+            func_to_call = lambda_api.arn_to_lambda[src['FunctionArn']].function()
             lambda_api.run_lambda(func_to_call, event=event, context={}, func_arn=src['FunctionArn'])
 
 
@@ -164,7 +163,7 @@ def forward_to_ddb_stream(records):
 def dynamodb_extract_keys(item, table_name):
     result = {}
     if table_name not in TABLE_DEFINITIONS:
-        LOGGER.warning("Unknown table: %s not found in %s" % (table_name, TABLE_DEFINITIONS))
+        LOGGER.warning('Unknown table: %s not found in %s' % (table_name, TABLE_DEFINITIONS))
         return None
     for key in TABLE_DEFINITIONS[table_name]['KeySchema']:
         attr_name = key['AttributeName']

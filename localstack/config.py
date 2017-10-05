@@ -1,22 +1,29 @@
 import re
 import os
+import socket
 import subprocess
 import tempfile
-from six import iteritems
-from localstack.constants import *
 from os.path import expanduser
+from six import iteritems
+from localstack.constants import DEFAULT_SERVICE_PORTS, LOCALHOST, PATH_USER_REQUEST, DEFAULT_PORT_WEB_UI
 
-# Randomly inject faults to Kinesis
+# randomly inject faults to Kinesis
 KINESIS_ERROR_PROBABILITY = float(os.environ.get('KINESIS_ERROR_PROBABILITY', '').strip() or 0.0)
 
-# Randomly inject faults to DynamoDB
+# randomly inject faults to DynamoDB
 DYNAMODB_ERROR_PROBABILITY = float(os.environ.get('DYNAMODB_ERROR_PROBABILITY', '').strip() or 0.0)
 
-# Allow custom hostname for services
+# expose services on a specific host internally
 HOSTNAME = os.environ.get('HOSTNAME', '').strip() or LOCALHOST
 
+# expose services on a specific host externally
+HOSTNAME_EXTERNAL = os.environ.get('HOSTNAME_EXTERNAL', '').strip() or LOCALHOST
+
+# name of the host under which the LocalStack services are available
+LOCALSTACK_HOSTNAME = os.environ.get('LOCALSTACK_HOSTNAME', '').strip() or HOSTNAME
+
 # whether to remotely copy the lambda or locally mount a volume
-LAMBDA_REMOTE_DOCKER = os.environ.get('LAMBDA_REMOTE_DOCKER', '').strip() in ['true', '1']
+LAMBDA_REMOTE_DOCKER = os.environ.get('LAMBDA_REMOTE_DOCKER', '').lower().strip() in ['true', '1']
 
 # folder for temporary files and data
 TMP_FOLDER = os.path.join(tempfile.gettempdir(), 'localstack')
@@ -39,6 +46,9 @@ DEFAULT_ENCODING = 'utf-8'
 # path to local Docker UNIX domain socket
 DOCKER_SOCK = os.environ.get('DOCKER_SOCK', '').strip() or '/var/run/docker.sock'
 
+# port of Web UI
+PORT_WEB_UI = int(os.environ.get('PORT_WEB_UI', '').strip() or DEFAULT_PORT_WEB_UI)
+
 # whether to use Lambda functions in a Docker container
 LAMBDA_EXECUTOR = os.environ.get('LAMBDA_EXECUTOR', '').strip()
 if not LAMBDA_EXECUTOR:
@@ -52,9 +62,30 @@ if not LAMBDA_EXECUTOR:
 # list of environment variable names used for configuration.
 # Make sure to keep this in sync with the above!
 # Note: do *not* include DATA_DIR in this list, as it is treated separately
-CONFIG_ENV_VARS = ('SERVICES', 'DEBUG', 'HOSTNAME', 'LAMBDA_EXECUTOR',
-    'LAMBDA_REMOTE_DOCKER', 'USE_SSL', 'LICENSE_KEY',
-    'KINESIS_ERROR_PROBABILITY', 'DYNAMODB_ERROR_PROBABILITY')
+CONFIG_ENV_VARS = ['SERVICES', 'HOSTNAME', 'HOSTNAME_EXTERNAL', 'LOCALSTACK_HOSTNAME',
+    'LAMBDA_EXECUTOR', 'LAMBDA_REMOTE_DOCKER', 'USE_SSL', 'LICENSE_KEY', 'DEBUG',
+    'KINESIS_ERROR_PROBABILITY', 'DYNAMODB_ERROR_PROBABILITY', 'PORT_WEB_UI']
+for key, value in iteritems(DEFAULT_SERVICE_PORTS):
+    backend_override_var = '%s_BACKEND' % key.upper().replace('-', '_')
+    if os.environ.get(backend_override_var):
+        CONFIG_ENV_VARS.append(backend_override_var)
+
+def in_docker():
+    """ Returns: True if running in a docker container, else False """
+    if not os.path.exists('/proc/1/cgroup'):
+        return False
+    with open('/proc/1/cgroup', 'rt') as ifh:
+        return 'docker' in ifh.read()
+
+# determine route to Docker host from container
+DOCKER_BRIDGE_IP = '172.17.0.1'
+try:
+    DOCKER_HOST_FROM_CONTAINER = socket.gethostbyname('docker.for.mac.localhost')
+    # update LOCALSTACK_HOSTNAME if docker.for.mac.localhost is available
+    if in_docker() and LOCALSTACK_HOSTNAME == DOCKER_BRIDGE_IP:
+        LOCALSTACK_HOSTNAME = DOCKER_HOST_FROM_CONTAINER
+except socket.error:
+    DOCKER_HOST_FROM_CONTAINER = DOCKER_BRIDGE_IP
 
 # local config file path in home directory
 CONFIG_FILE_PATH = os.path.join(expanduser("~"), '.localstack')
@@ -69,6 +100,14 @@ for folder in [DATA_DIR, TMP_FOLDER]:
             # multiple processes in parallel. Should be safe to ignore
             pass
 
+# set variables no_proxy, i.e., run internal service calls directly
+no_proxy = ','.join(set((LOCALSTACK_HOSTNAME, HOSTNAME, LOCALHOST, '127.0.0.1', '[::1]')))
+if os.environ.get('no_proxy'):
+    os.environ['no_proxy'] += ',' + no_proxy
+elif os.environ.get('NO_PROXY'):
+    os.environ['NO_PROXY'] += ',' + no_proxy
+else:
+    os.environ['no_proxy'] = no_proxy
 
 # additional CLI commands, can be set by plugins
 CLI_COMMANDS = {}
@@ -102,11 +141,14 @@ def populate_configs():
 
         # define PORT_* variables with actual service ports as per configuration
         exec('global PORT_%s; PORT_%s = SERVICE_PORTS.get("%s", 0)' % (key_upper, key_upper, key))
-        url = "http%s://%s:%s" % ('s' if USE_SSL else '', HOSTNAME, SERVICE_PORTS.get(key, 0))
+        url = 'http%s://%s:%s' % ('s' if USE_SSL else '', LOCALSTACK_HOSTNAME, SERVICE_PORTS.get(key, 0))
         # define TEST_*_URL variables with mock service endpoints
         exec('global TEST_%s_URL; TEST_%s_URL = "%s"' % (key_upper, key_upper, url))
         # expose HOST_*_URL variables as environment variables
         os.environ['TEST_%s_URL' % key_upper] = url
+
+    # expose LOCALSTACK_HOSTNAME as env. variable
+    os.environ['LOCALSTACK_HOSTNAME'] = LOCALSTACK_HOSTNAME
 
 
 def service_port(service_key):
@@ -118,4 +160,5 @@ populate_configs()
 
 
 # set URL pattern of inbound API gateway
-INBOUND_GATEWAY_URL_PATTERN = '%s/restapis/{api_id}/{stage_name}/%s{path}' % (TEST_APIGATEWAY_URL, PATH_USER_REQUEST)
+INBOUND_GATEWAY_URL_PATTERN = ('%s/restapis/{api_id}/{stage_name}/%s{path}' %
+    (TEST_APIGATEWAY_URL, PATH_USER_REQUEST))  # flake8: noqa

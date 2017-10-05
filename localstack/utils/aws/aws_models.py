@@ -25,11 +25,12 @@ class Component(object):
 
 
 class KinesisStream(Component):
-    def __init__(self, id, params={}, num_shards=1, connection=None):
+    def __init__(self, id, params=None, num_shards=1, connection=None):
         super(KinesisStream, self).__init__(id)
+        params = params or {}
         self.shards = []
-        self.stream_name = params['name'] if 'name' in params else self.name()
-        self.num_shards = params['shards'] if 'shards' in params else num_shards
+        self.stream_name = params.get('name', self.name())
+        self.num_shards = params.get('shards', num_shards)
         self.conn = connection
         self.stream_info = params
 
@@ -61,14 +62,16 @@ class KinesisStream(Component):
         return self.conn.put_record(StreamName=self.stream_name, Data=data, PartitionKey=key)
 
     def read(self, amount=-1, shard='shardId-000000000001'):
-        s_iterator = kinesis_conn.get_shard_iterator(self.stream_name, shard, 'TRIM_HORIZON')
-        record = kinesis_conn.get_records(s_iterator['ShardIterator'])
+        if not self.conn:
+            raise Exception('Please create the Kinesis connection first.')
+        s_iterator = self.conn.get_shard_iterator(self.stream_name, shard, 'TRIM_HORIZON')
+        record = self.conn.get_records(s_iterator['ShardIterator'])
         while True:
             try:
                 if record['NextShardIterator'] is None:
                     break
                 else:
-                    next_entry = kinesis_conn.get_records(record['NextShardIterator'])
+                    next_entry = self.conn.get_records(record['NextShardIterator'])
                     if len(next_entry['Records']):
                         print(next_entry['Records'][0]['Data'])
                     record = next_entry
@@ -83,7 +86,7 @@ class KinesisStream(Component):
                 status = self.get_status()
                 if status == 'ACTIVE':
                     return
-            except Exception as e:
+            except Exception:
                 # swallowing this exception should be ok, as we are in a retry loop
                 pass
             time.sleep(GET_STATUS_SLEEP_SECS)
@@ -95,12 +98,12 @@ class KinesisStream(Component):
 
 
 class KinesisShard(Component):
-    MAX_KEY = "340282366920938463463374607431768211455"
+    MAX_KEY = '340282366920938463463374607431768211455'
 
     def __init__(self, id):
         super(KinesisShard, self).__init__(id)
         self.stream = None
-        self.start_key = "0"
+        self.start_key = '0'
         self.end_key = KinesisShard.MAX_KEY  # 128 times '1' binary as decimal
         self.child_shards = []
 
@@ -154,13 +157,30 @@ class FirehoseStream(KinesisStream):
 
 
 class LambdaFunction(Component):
-    def __init__(self, id):
-        super(LambdaFunction, self).__init__(id)
+    def __init__(self, arn):
+        super(LambdaFunction, self).__init__(arn)
         self.event_sources = []
         self.targets = []
+        self.versions = {}
+        self.aliases = {}
+        self.envvars = {}
+        self.runtime = None
+        self.handler = None
+        self.cwd = None
+
+    def get_version(self, version):
+        return self.versions.get(version)
 
     def name(self):
         return self.id.split(':function:')[-1]
+
+    def function(self, qualifier='$LATEST'):
+        version = qualifier if qualifier in self.versions else \
+            self.aliases.get(qualifier).get('FunctionVersion')
+        return self.versions.get(version).get('Function')
+
+    def qualifier_exists(self, qualifier):
+        return qualifier in self.aliases or qualifier in self.versions
 
     def __str__(self):
         return '<%s:%s>' % (self.__class__.__name__, self.name())
@@ -238,7 +258,8 @@ class EventSource(Component):
         super(EventSource, self).__init__(id)
 
     @staticmethod
-    def get(obj, pool={}, type=None):
+    def get(obj, pool=None, type=None):
+        pool = pool or {}
         if not obj:
             return None
         if isinstance(obj, Component):
@@ -266,13 +287,9 @@ class EventSource(Component):
                     if o.endpoint == obj:
                         return o
         else:
-            print("Unexpected object name! %s" % obj)
+            print("Unexpected object name: '%s'" % obj)
         return inst
 
     @staticmethod
     def filter_type(pool, type):
-        result = []
-        for key, obj in six.iteritems(pool):
-            if isinstance(obj, type):
-                result.append(obj)
-        return result
+        return [obj for obj in six.itervalues(pool) if isinstance(obj, type)]

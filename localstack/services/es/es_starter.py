@@ -1,14 +1,14 @@
+import os
 import six
 import logging
 import traceback
-from localstack.constants import *
-from localstack.config import *
-from localstack.services.infra import get_service_protocol, start_proxy, do_run
+from localstack.constants import DEFAULT_PORT_ELASTICSEARCH_BACKEND, LOCALSTACK_ROOT_FOLDER
+from localstack.config import PORT_ELASTICSEARCH, DATA_DIR
+from localstack.services.infra import get_service_protocol, start_proxy_for_service, do_run
 from localstack.utils.common import run, is_root
 from localstack.utils.aws import aws_stack
 from localstack.services import install
 from localstack.services.install import ROOT_PATH
-from localstack.services.generic_proxy import GenericProxy
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,14 +33,15 @@ def start_elasticsearch(port=PORT_ELASTICSEARCH, delete_data=True, async=False, 
     cmd = (('ES_JAVA_OPTS=\"$ES_JAVA_OPTS -Xms200m -Xmx500m\" %s/infra/elasticsearch/bin/elasticsearch ' +
         '-E http.port=%s -E http.publish_port=%s -E http.compression=false -E path.data=%s') %
         (ROOT_PATH, backend_port, backend_port, es_data_dir))
-    print("Starting local Elasticsearch (%s port %s)..." % (get_service_protocol(), port))
+    print('Starting local Elasticsearch (%s port %s)...' % (get_service_protocol(), port))
     if delete_data:
         run('rm -rf %s' % es_data_dir)
     # fix permissions
     run('chmod -R 777 %s/infra/elasticsearch' % ROOT_PATH)
     run('mkdir -p "%s"; chmod -R 777 "%s"' % (es_data_dir, es_data_dir))
     # start proxy and ES process
-    start_proxy(port, backend_port, update_listener, quiet=True, params={'protocol_version': 'HTTP/1.0'})
+    start_proxy_for_service('elasticsearch', port, backend_port,
+        update_listener, quiet=True, params={'protocol_version': 'HTTP/1.0'})
     if is_root():
         cmd = "su -c '%s' localstack" % cmd
     thread = do_run(cmd, async)

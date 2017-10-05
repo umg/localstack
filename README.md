@@ -1,14 +1,13 @@
-[![Build Status](https://travis-ci.org/localstack/localstack.png)](https://travis-ci.org/localstack/localstack)
-[![Coverage Status](https://coveralls.io/repos/github/atlassian/localstack/badge.svg?branch=master)](https://coveralls.io/github/atlassian/localstack?branch=master)
+[![Build Status](https://travis-ci.org/localstack/localstack.png)](https://travis-ci.org/localstack/localstack) [![Backers on Open Collective](https://opencollective.com/localstack/backers/badge.svg)](#backers) [![Sponsors on Open Collective](https://opencollective.com/localstack/sponsors/badge.svg)](#sponsors) [![Coverage Status](https://coveralls.io/repos/github/atlassian/localstack/badge.svg?branch=master)](https://coveralls.io/github/atlassian/localstack?branch=master)
 [![Gitter](https://img.shields.io/gitter/room/localstack/Platform.svg)](https://gitter.im/localstack/Platform)
-[![Twitter](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/_localstack)
 [![PyPI Version](https://badge.fury.io/py/localstack.svg)](https://badge.fury.io/py/localstack)
 [![PyPI License](https://img.shields.io/pypi/l/localstack.svg)](https://img.shields.io/pypi/l/localstack.svg)
 [![Code Climate](https://codeclimate.com/github/atlassian/localstack/badges/gpa.svg)](https://codeclimate.com/github/atlassian/localstack)
+[![Twitter](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/_localstack)
 
 # LocalStack - A fully functional local AWS cloud stack
 
-![LocalStack](https://i.imgsafe.org/fe38108cd6.png)
+![LocalStack](https://github.com/localstack/localstack/raw/master/localstack/dashboard/web/img/localstack.png)
 
 *LocalStack* provides an easy-to-use test/mocking framework for developing Cloud applications.
 
@@ -16,6 +15,7 @@ Currently, the focus is primarily on supporting the AWS cloud stack.
 
 # Announcements
 
+* **2017-08-27**: **We need your support!** LocalStack is growing fast, we now have thousands of developers using the platform on a regular basis. Last month we have recorded a staggering 100k test runs, with 25k+ DynamoDB tables, 20k+ SQS queues, 15k+ Kinesis streams, 13k+ S3 buckets, and 10k+ Lambda functions created locally - for 0$ costs (more details to be published soon). Bug and feature requests are pouring in, and we now need some support from _you_ to keep the open source version actively maintained. Please check out [Open Collective](https://opencollective.com/localstack) and become a [backer](https://github.com/localstack/localstack#backers) or [supporter](https://github.com/localstack/localstack#backers) of the project today! Thanks everybody for contributing. ♥
 * **2017-07-20**: Please note: Starting with version `0.7.0`, the Docker image will be pushed
 and kept up to date under the **new name** `localstack/localstack`. (This means that you may
 have to update your CI configurations.) Please refer to the updated
@@ -43,6 +43,7 @@ any longer.
 * **Route53** at http://localhost:4580
 * **CloudFormation** at http://localhost:4581
 * **CloudWatch** at http://localhost:4582
+* **SSM** at http://localhost:4583
 
 
 Additionally, *LocalStack* provides a powerful set of tools to interact with the cloud services, including
@@ -74,7 +75,7 @@ missing functionality on top of them:
   cloud environment.
 * **Pluggable services**: All services in *LocalStack* are easily pluggable (and replaceable), due to the fact that
   we are using isolated processes for each service. This allows us to keep the framework up-to-date and select
-  best-of-breed mocks for each individual service (e.g., kinesalite is much more advanced than its moto counterpart).
+  best-of-breed mocks for each individual service.
 
 
 ## Requirements
@@ -130,8 +131,11 @@ You can pass the following environment variables to LocalStack:
   Example value: `kinesis,lambda:4569,sqs:4570` to start Kinesis on the default port,
   Lambda on port 4569, and SQS on port 4570.
 * `DEFAULT_REGION`: AWS region to use when talking to the API (defaults to `us-east-1`).
-* `HOSTNAME`: If you need to expose your services on a specific host
-  (defaults to `localhost`).
+* `HOSTNAME`: Name of the host to expose the services internally (defaults to `localhost`).
+  Use this to customize the framework-internal communication, e.g., if services are
+  started in different containers using docker-compose.
+* `HOSTNAME_EXTERNAL`: Name of the host to expose the services externally (defaults to `localhost`).
+  This host is used, e.g., when returning queue URLs from the SQS service to the client.
 * `USE_SSL`: Whether to use `https://...` URLs with SSL encryption (defaults to `false`).
 * `KINESIS_ERROR_PROBABILITY`: Decimal value between 0.0 (default) and 1.0 to randomly
   inject `ProvisionedThroughputExceededException` errors into Kinesis API responses.
@@ -153,8 +157,20 @@ You can pass the following environment variables to LocalStack:
   Kinesis, DynamoDB, Elasticsearch). Set it to `/tmp/localstack/data` to enable persistence
   (`/tmp/localstack` is mounted into the Docker container), leave blank to disable
   persistence (default).
+* `PORT_WEB_UI`: Port for the Web user interface (dashboard). Default is `8080`.
+* `<SERVICE>_BACKEND`: Custom endpoint URL to use for a specific service, where `<SERVICE>` is the uppercase
+  service name (currently works for: `APIGATEWAY`, `CLOUDFORMATION`, `DYNAMODB`, `ELASTICSEARCH`,
+  `KINESIS`, `S3`, `SNS`, `SQS`). This allows to easily integrate third-party services into LocalStack.
 
-## Accessing the infrastructure via CLI or code 
+Additionally, the following *read-only* environment variables are available:
+
+* `LOCALSTACK_HOSTNAME`: Name of the host where LocalStack services are available.
+  This is needed in order to access the services from within your Lambda functions
+  (e.g., to store an item to DynamoDB or S3 from Lambda).
+  The variable `LOCALSTACK_HOSTNAME` is available for both, local Lambda execution
+  (`LAMBDA_EXECUTOR=local`) and execution inside separate Docker containers (`LAMBDA_EXECUTOR=docker`).
+
+## Accessing the infrastructure via CLI or code
 
 You can point your `aws` CLI to use the local infrastructure, for example:
 
@@ -165,7 +181,7 @@ aws --endpoint-url=http://localhost:4568 kinesis list-streams
 }
 ```
 
-**NEW**: Check out `awslocal`, a thin CLI wrapper that runs commands directly against *LocalStack* (no need to
+**NEW**: Check out [awslocal](https://github.com/localstack/awscli-local), a thin CLI wrapper that runs commands directly against *LocalStack* (no need to
 specify `--endpoint-url` anymore). Install it via `pip install awscli-local`, and then use it as follows:
 
 ```
@@ -174,6 +190,9 @@ awslocal kinesis list-streams
     "StreamNames": []
 }
 ```
+
+**UPDATE**: Use the environment variable `$LOCALSTACK_HOSTNAME` to determine the target host
+inside your Lambda function. See [Configurations](#Configurations) section for more details.
 
 ### Client Libraries
 
@@ -232,7 +251,7 @@ Simply add the following dependency to your `pom.xml` file:
 <dependency>
     <groupId>cloud.localstack</groupId>
     <artifactId>localstack-utils</artifactId>
-    <version>0.1.2</version>
+    <version>0.1.4</version>
 </dependency>
 ```
 
@@ -255,6 +274,9 @@ builder.withPathStyleAccessEnabled(true);
 
 * If you are deploying within OpenShift, please be aware: the pod must run as `root`, and the user must have capabilities added to the running pod, in order to allow Elasticsearch to be run as the non-root `localstack` user.
 
+* The environment variable `no_proxy` is rewritten by *LocalStack*.
+(Internal requests will go straight via localhost, bypassing any proxy configuration).
+
 ## Developing
 
 If you pull the repo in order to extend/modify LocalStack, run this command to install
@@ -264,7 +286,7 @@ all the dependencies:
 make install
 ```
 
-This will install the required pip dependencies in a local Python virtualenv directory 
+This will install the required pip dependencies in a local Python virtualenv directory
 `.venv` (your global python packages will remain untouched), as well as some node modules
 in `./localstack/node_modules/`. Depending on your system, some pip/npm modules may require
 additional native libs installed.
@@ -274,6 +296,11 @@ The Makefile contains a target to conveniently run the local infrastructure for 
 ```
 make infra
 ```
+
+Check out the
+[developer guide](https://github.com/localstack/localstack/tree/master/doc/developer_guides) which
+contains a few instructions on how to get started with developing (and debugging) features for
+LocalStack.
 
 ## Testing
 
@@ -295,6 +322,9 @@ localstack web
 
 ## Change Log
 
+* v0.8.1: Improvements in Lambda API: publish-version, list-version, function aliases; use single map with Lambda function details; workaround for SQS .fifo queues; add test for S3 upload; initial support for SSM; fix regex to replace SQS queue URL hostnames; update linter (single quotes); use `docker.for.mac.localhost` to connect to LocalStack from Docker on Mac; fix b64 encoding for Java Lambdas; fix path of moto_server command
+* v0.8.0: Fix request data in `GenericProxyHandler`; add `$PORT_WEB_UI` and `$HOSTNAME_EXTERNAL` configs; API Gateway path parameters; enable flake8 linting; add config for service backend URLs; use ElasticMQ instead of moto for SQS; expose `$LOCALSTACK_HOSTNAME`; custom environment variable support for Lambda; improve error logging and installation for Java/JUnit; add support for S3 REST Object POST
+* v0.7.5: Fix issue with incomplete parallel downloads; bypass http_proxy for internal requests; use native Python code to unzip archives; download KCL client libs only for testing and not on pip install
 * v0.7.4: Refactor CLI and enable plugins; support unicode names for S3; fix SQS names containing a dot character; execute Java Lambda functions in Docker containers; fix DynamoDB error handling; update docs
 * v0.7.3: Extract proxy listeners into (sub-)classes; put java libs into a single "fat" jar; fix issue with non-daemonized threads; refactor code to start flask services
 * v0.7.2: Fix DATA_DIR config when running in Docker; fix Maven dependencies; return 'ConsumedCapacity' from DynamoDB get-item; use Queue ARN instead of URL for S3 bucket notifications
@@ -354,10 +384,41 @@ For pull requests, please stick to the following guidelines:
 * Follow the existing code style (e.g., indents). A PEP8 code linting target is included in the Makefile.
 * Put a reasonable amount of comments into the code.
 * Separate unrelated changes into multiple pull requests.
+* 1 commit per PR: Please squash/rebase multiple commits into one single commit (to keep the history clean).
 
 Please note that by contributing any code or documentation to this repository (by
 raising pull requests, or otherwise) you explicitly agree to
 the [**Contributor License Agreement**](doc/contributor_license_agreement).
+
+## Contributors
+
+This project exists thanks to all the people who contribute.
+<a href="graphs/contributors"><img src="https://opencollective.com/localstack/contributors.svg?width=890" /></a>
+
+
+## Backers
+
+Thank you to all our backers! 🙏 [[Become a backer](https://opencollective.com/localstack#backer)]
+
+<a href="https://opencollective.com/localstack#backers" target="_blank"><img src="https://opencollective.com/localstack/backers.svg?width=890"></a>
+
+
+## Sponsors
+
+Support this project by becoming a sponsor. Your logo will show up here with a link to your website. [[Become a sponsor](https://opencollective.com/localstack#sponsor)]
+
+<a href="https://opencollective.com/localstack/sponsor/0/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/0/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/1/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/1/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/2/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/2/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/3/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/3/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/4/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/4/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/5/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/5/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/6/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/6/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/7/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/7/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/8/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/8/avatar.svg"></a>
+<a href="https://opencollective.com/localstack/sponsor/9/website" target="_blank"><img src="https://opencollective.com/localstack/sponsor/9/avatar.svg"></a>
+
+
 
 ## License
 

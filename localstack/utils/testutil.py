@@ -1,19 +1,14 @@
-import json
-import boto3
-import uuid
 import os
+import json
 import time
 import glob
 import tempfile
 from six import iteritems
-from localstack.constants import REGION_LOCAL, LOCALSTACK_ROOT_FOLDER, LOCALSTACK_VENV_FOLDER
-from localstack.config import TEST_S3_URL
+from localstack.constants import LOCALSTACK_ROOT_FOLDER, LOCALSTACK_VENV_FOLDER, LAMBDA_TEST_ROLE
 from localstack.services.awslambda.lambda_api import (get_handler_file_from_name, LAMBDA_DEFAULT_HANDLER,
     LAMBDA_DEFAULT_RUNTIME, LAMBDA_DEFAULT_STARTING_POSITION, LAMBDA_DEFAULT_TIMEOUT)
-from localstack.utils.common import *
+from localstack.utils.common import run, mkdir, to_str, save_file, TMP_FILES
 from localstack.utils.aws import aws_stack
-from localstack.utils.aws.aws_models import DynamoDB, ElasticSearch
-from localstack.utils.kinesis import kinesis_connector
 
 
 ARCHIVE_DIR_PREFIX = 'lambda.archive.'
@@ -96,19 +91,20 @@ def create_zip_file(file_path, include='*', get_content=False):
         TMP_FILES.append(tmp_dir)
         return zip_file
     zip_file_content = None
-    with open(zip_file, "rb") as file_obj:
+    with open(zip_file, 'rb') as file_obj:
         zip_file_content = file_obj.read()
     run('rm -r "%s"' % tmp_dir)
     return zip_file_content
 
 
 def create_lambda_function(func_name, zip_file, event_source_arn=None, handler=LAMBDA_DEFAULT_HANDLER,
-        starting_position=LAMBDA_DEFAULT_STARTING_POSITION, runtime=LAMBDA_DEFAULT_RUNTIME):
+        starting_position=LAMBDA_DEFAULT_STARTING_POSITION, runtime=LAMBDA_DEFAULT_RUNTIME,
+        envvars={}):
     """Utility method to create a new function via the Lambda API"""
 
     client = aws_stack.connect_to_service('lambda')
     # create function
-    result = client.create_function(
+    client.create_function(
         FunctionName=func_name,
         Runtime=runtime,
         Handler=handler,
@@ -116,7 +112,8 @@ def create_lambda_function(func_name, zip_file, event_source_arn=None, handler=L
         Code={
             'ZipFile': zip_file
         },
-        Timeout=LAMBDA_DEFAULT_TIMEOUT
+        Timeout=LAMBDA_DEFAULT_TIMEOUT,
+        Environment=dict(Variables=envvars)
     )
     # create event source mapping
     if event_source_arn:
@@ -144,8 +141,7 @@ def assert_object(expected_object, all_objects):
         all_objects = [all_objects]
     found = find_object(expected_object, all_objects)
     if not found:
-        raise Exception("Expected object not found: %s in list %s" %
-                        (expected_object, all_objects))
+        raise Exception('Expected object not found: %s in list %s' % (expected_object, all_objects))
 
 
 def find_object(expected_object, object_list):

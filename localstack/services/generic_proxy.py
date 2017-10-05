@@ -13,8 +13,8 @@ from six import iteritems, string_types
 from six.moves.socketserver import ThreadingMixIn
 from six.moves.urllib.parse import urlparse
 from localstack.config import DEFAULT_ENCODING, TMP_FOLDER, USE_SSL
-from localstack.utils.common import FuncThread, generate_ssl_cert
-from localstack.utils.compat import bytes_
+from localstack.constants import ENV_INTERNAL_TEST_RUN
+from localstack.utils.common import FuncThread, generate_ssl_cert, to_bytes
 
 QUIET = False
 
@@ -87,12 +87,12 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
             return result
         # Required fix for Python 2 (otherwise S3 uploads are hanging), based on the Python 3 code:
         # https://sourcecodebrowser.com/python3.2/3.2.3/http_2server_8py_source.html#l00332
-        expect = self.headers.get('Expect', "")
-        if (expect.lower() == "100-continue" and
-                self.protocol_version >= "HTTP/1.1" and
-                self.request_version >= "HTTP/1.1"):
+        expect = self.headers.get('Expect', '')
+        if (expect.lower() == '100-continue' and
+                self.protocol_version >= 'HTTP/1.1' and
+                self.request_version >= 'HTTP/1.1'):
             if self.request_version != 'HTTP/0.9':
-                self.wfile.write(("%s %d %s\r\n" %
+                self.wfile.write(('%s %d %s\r\n' %
                     (self.protocol_version, 100, 'Continue')).encode('latin1', 'strict'))
                 self.end_headers()
         return result
@@ -102,6 +102,8 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
         content_length = self.headers.get('Content-Length')
         if content_length:
             self.data_bytes = self.rfile.read(int(content_length))
+        else:
+            self.data_bytes = None
         self.forward('GET')
 
     def do_PUT(self):
@@ -115,10 +117,12 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
         self.forward('POST')
 
     def do_DELETE(self):
+        self.data_bytes = None
         self.method = requests.delete
         self.forward('DELETE')
 
     def do_HEAD(self):
+        self.data_bytes = None
         self.method = requests.head
         self.forward('HEAD')
 
@@ -128,6 +132,7 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
         self.forward('PATCH')
 
     def do_OPTIONS(self):
+        self.data_bytes = None
         self.method = requests.options
         self.forward('OPTIONS')
 
@@ -135,10 +140,10 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
         path = self.path
         if '://' in path:
             path = '/' + path.split('://', 1)[1].split('/', 1)[1]
-        proxy_url = 'http://%s%s' % (self.proxy.forward_host, path)
+        proxy_url = '%s%s' % (self.proxy.forward_url, path)
         target_url = self.path
         if '://' not in target_url:
-            target_url = 'http://%s%s' % (self.proxy.forward_host, target_url)
+            target_url = '%s%s' % (self.proxy.forward_url, target_url)
         data = None
         if method in ['POST', 'PUT', 'PATCH']:
             data_string = self.data_bytes
@@ -210,13 +215,19 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
 
             self.end_headers()
             if response.content and len(response.content):
-                self.wfile.write(bytes_(response.content))
+                self.wfile.write(to_bytes(response.content))
             self.wfile.flush()
         except Exception as e:
             trace = str(traceback.format_exc())
             conn_error = 'ConnectionRefusedError' in trace or 'NewConnectionError' in trace
+            error_msg = 'Error forwarding request: %s %s' % (e, trace)
             if not self.proxy.quiet or not conn_error:
-                LOGGER.error("Error forwarding request: %s %s" % (e, trace))
+                LOGGER.error(error_msg)
+                if os.environ.get(ENV_INTERNAL_TEST_RUN):
+                    # During a test run, we also want to print error messages, because
+                    # log messages are delayed until the entire test run is over, and
+                    # hence we are missing messages if the test hangs for some reason.
+                    print('ERROR: %s' % error_msg)
             self.send_response(502)  # bad gateway
             self.end_headers()
 
@@ -225,13 +236,17 @@ class GenericProxyHandler(BaseHTTPRequestHandler):
 
 
 class GenericProxy(FuncThread):
-    def __init__(self, port, forward_host=None, ssl=False, host=None, update_listener=None, quiet=False, params={}):
+    def __init__(self, port, forward_url=None, ssl=False, host=None, update_listener=None, quiet=False, params={}):
         FuncThread.__init__(self, self.run_cmd, params, quiet=quiet)
         self.httpd = None
         self.port = port
         self.ssl = ssl
         self.quiet = quiet
-        self.forward_host = forward_host
+        if forward_url:
+            if '://' not in forward_url:
+                forward_url = 'http://%s' % forward_url
+            forward_url = forward_url.rstrip('/')
+        self.forward_url = forward_url
         self.update_listener = update_listener
         self.server_stopped = False
         # Required to enable 'Connection: keep-alive' for S3 uploads
@@ -250,7 +265,7 @@ class GenericProxy(FuncThread):
             self.httpd.serve_forever()
         except Exception as e:
             if not self.quiet or not self.server_stopped:
-                LOGGER.error('Exception running proxy on port %s: %s' % (self.port, traceback.format_exc()))
+                LOGGER.error('Exception running proxy on port %s: %s %s' % (self.port, e, traceback.format_exc()))
 
     def stop(self, quiet=False):
         self.quiet = quiet

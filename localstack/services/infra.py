@@ -5,25 +5,29 @@ import time
 import signal
 import traceback
 import logging
-import requests
-import json
 import boto3
 import subprocess
 import six
 import warnings
 import pkgutil
 from localstack import constants, config
-from localstack.config import *
-from localstack.utils.aws import aws_stack
+from localstack.constants import (ENV_DEV, DEFAULT_REGION, LOCALSTACK_VENV_FOLDER,
+    DEFAULT_PORT_S3_BACKEND, DEFAULT_PORT_APIGATEWAY_BACKEND,
+    DEFAULT_PORT_SNS_BACKEND, DEFAULT_PORT_CLOUDFORMATION_BACKEND)
+from localstack.config import (USE_SSL, PORT_ROUTE53, PORT_S3,
+    PORT_FIREHOSE, PORT_LAMBDA, PORT_SNS, PORT_REDSHIFT, PORT_CLOUDWATCH,
+    PORT_DYNAMODBSTREAMS, PORT_SES, PORT_ES, PORT_CLOUDFORMATION, PORT_APIGATEWAY,
+    PORT_SSM)
 from localstack.utils import common, persistence
-from localstack.utils.common import *
+from localstack.utils.common import (run, TMP_THREADS, in_ci, run_cmd_safe,
+    TIMESTAMP_FORMAT, FuncThread, ShellCommandThread, mkdir)
 from localstack.utils.analytics import event_publisher
 from localstack.services import generic_proxy, install
 from localstack.services.firehose import firehose_api
 from localstack.services.awslambda import lambda_api
 from localstack.services.dynamodbstreams import dynamodbstreams_api
 from localstack.services.es import es_api
-from localstack.services.generic_proxy import GenericProxy, SERVER_CERT_PEM_FILE
+from localstack.services.generic_proxy import GenericProxy
 
 # flag to indicate whether signal handlers have been set up already
 SIGNAL_HANDLERS_SETUP = False
@@ -44,6 +48,11 @@ SERVICE_PLUGINS = {}
 # plugin scopes
 PLUGIN_SCOPE_SERVICES = 'services'
 PLUGIN_SCOPE_COMMANDS = 'commands'
+
+# log format strings
+LOG_FORMAT = '%(asctime)s:%(levelname)s:%(name)s: %(message)s'
+LOG_DATE_FORMAT = TIMESTAMP_FORMAT
+
 
 # -----------------
 # PLUGIN UTILITIES
@@ -101,8 +110,8 @@ def load_plugins(scope=None):
     scope = scope or PLUGIN_SCOPE_SERVICES
     if PLUGINS_LOADED.get(scope, None):
         return
-    logging.captureWarnings(True)
-    logging.basicConfig(level=logging.WARNING)
+
+    setup_logging()
 
     loaded_files = []
     result = []
@@ -143,11 +152,6 @@ def start_sns(port=PORT_SNS, async=False, update_listener=None):
         backend_port=DEFAULT_PORT_SNS_BACKEND, update_listener=update_listener)
 
 
-def start_sqs(port=PORT_SQS, async=False, update_listener=None):
-    return start_moto_server('sqs', port, name='SQS', async=async,
-        backend_port=DEFAULT_PORT_SQS_BACKEND, update_listener=update_listener)
-
-
 def start_cloudformation(port=PORT_CLOUDFORMATION, async=False, update_listener=None):
     return start_moto_server('cloudformation', port, name='CloudFormation', async=async,
         backend_port=DEFAULT_PORT_CLOUDFORMATION_BACKEND, update_listener=update_listener)
@@ -185,9 +189,25 @@ def start_lambda(port=PORT_LAMBDA, async=False):
     return start_local_api('Lambda', port, method=lambda_api.serve, async=async)
 
 
+def start_ssm(port=PORT_SSM, async=False):
+    return start_moto_server('ssm', port, name='SSM', async=async)
+
+
 # ---------------
 # HELPER METHODS
 # ---------------
+
+def setup_logging():
+    # determine and set log level
+    log_level = logging.DEBUG if is_debug() else logging.INFO
+    logging.basicConfig(level=log_level, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    # disable some logs and warnings
+    warnings.filterwarnings('ignore')
+    logging.captureWarnings(True)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('botocore').setLevel(logging.ERROR)
+    logging.getLogger('elasticsearch').setLevel(logging.ERROR)
 
 
 def get_service_protocol():
@@ -231,29 +251,38 @@ def do_run(cmd, async, print_output=False):
         return run(cmd)
 
 
-def start_proxy(port, backend_port, update_listener, quiet=False,
-        backend_host=DEFAULT_BACKEND_HOST, params={}):
-    proxy_thread = GenericProxy(port=port, forward_host='%s:%s' % (backend_host, backend_port),
+def start_proxy_for_service(service_name, port, default_backend_port, update_listener, quiet=False, params={}):
+    # check if we have a custom backend configured
+    custom_backend_url = os.environ.get('%s_BACKEND' % service_name.upper())
+    backend_url = custom_backend_url or ('http://%s:%s' % (DEFAULT_BACKEND_HOST, default_backend_port))
+    return start_proxy(port, backend_url=backend_url, update_listener=update_listener, quiet=quiet, params=params)
+
+
+def start_proxy(port, backend_url, update_listener, quiet=False, params={}):
+    proxy_thread = GenericProxy(port=port, forward_url=backend_url,
         ssl=USE_SSL, update_listener=update_listener, quiet=quiet, params=params)
     proxy_thread.start()
     TMP_THREADS.append(proxy_thread)
+    return proxy_thread
 
 
 def start_moto_server(key, port, name=None, backend_port=None, async=False, update_listener=None):
-    cmd = 'VALIDATE_LAMBDA_S3=0 %s/bin/moto_server %s -p %s -H %s' % (LOCALSTACK_VENV_FOLDER, key,
-        backend_port or port, constants.BIND_HOST)
+    moto_server_cmd = '%s/bin/moto_server' % LOCALSTACK_VENV_FOLDER
+    if not os.path.exists(moto_server_cmd):
+        moto_server_cmd = run('which moto_server').strip()
+    cmd = 'VALIDATE_LAMBDA_S3=0 %s %s -p %s -H %s' % (moto_server_cmd, key, backend_port or port, constants.BIND_HOST)
     if not name:
         name = key
-    print("Starting mock %s (%s port %s)..." % (name, get_service_protocol(), port))
+    print('Starting mock %s (%s port %s)...' % (name, get_service_protocol(), port))
     if backend_port:
-        start_proxy(port, backend_port, update_listener)
+        start_proxy_for_service(key, port, backend_port, update_listener)
     elif USE_SSL:
         cmd += ' --ssl'
     return do_run(cmd, async)
 
 
 def start_local_api(name, port, method, async=False):
-    print("Starting mock %s service (%s port %s)..." % (name, get_service_protocol(), port))
+    print('Starting mock %s service (%s port %s)...' % (name, get_service_protocol(), port))
     if async:
         thread = FuncThread(method, port, quiet=True)
         thread.start()
@@ -282,7 +311,11 @@ def stop_infra():
 
 def check_aws_credentials():
     session = boto3.Session()
-    credentials = session.get_credentials()
+    credentials = None
+    try:
+        credentials = session.get_credentials()
+    except Exception:
+        pass
     if not credentials:
         # set temporary dummy credentials
         os.environ['AWS_ACCESS_KEY_ID'] = 'LocalStackDummyAccessKey'
@@ -392,7 +425,9 @@ def start_infra_in_docker():
             config.HOST_TMP_FOLDER, image_name, cmd
     )
 
-    run('mkdir -p "{folder}"; chmod -R 777 "{folder}";'.format(folder=config.TMP_FOLDER))
+    mkdir(config.TMP_FOLDER)
+    run_cmd_safe(cmd='chmod -R 777 "%s"' % config.TMP_FOLDER)
+
     print(docker_cmd)
     t = ShellCommandThread(docker_cmd, outfile=subprocess.PIPE)
     t.start()
@@ -414,12 +449,7 @@ def start_infra(async=False, apis=None):
         event_publisher.fire_event(event_publisher.EVENT_START_INFRA)
 
         # set up logging
-        warnings.filterwarnings('ignore')
-        logging.captureWarnings(True)
-        logging.basicConfig(level=logging.WARNING)
-        logging.getLogger('botocore').setLevel(logging.ERROR)
-        logging.getLogger('elasticsearch').setLevel(logging.ERROR)
-        LOGGER.setLevel(logging.INFO)
+        setup_logging()
 
         if not apis:
             apis = list(config.SERVICE_PORTS.keys())

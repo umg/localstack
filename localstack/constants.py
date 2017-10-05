@@ -1,8 +1,7 @@
 import os
-import sys
 
 # LocalStack version
-VERSION = '0.7.4'
+VERSION = '0.8.1'
 
 # default AWS region
 if 'DEFAULT_REGION' not in os.environ:
@@ -32,6 +31,7 @@ DEFAULT_PORT_SES = 4579
 DEFAULT_PORT_ROUTE53 = 4580
 DEFAULT_PORT_CLOUDFORMATION = 4581
 DEFAULT_PORT_CLOUDWATCH = 4582
+DEFAULT_PORT_SSM = 4583
 # backend service ports, for services that are behind a proxy (counting down from 4566)
 DEFAULT_PORT_APIGATEWAY_BACKEND = 4566
 DEFAULT_PORT_KINESIS_BACKEND = 4565
@@ -63,7 +63,8 @@ DEFAULT_SERVICE_PORTS = {
     'route53': DEFAULT_PORT_ROUTE53,
     'ses': DEFAULT_PORT_SES,
     'cloudformation': DEFAULT_PORT_CLOUDFORMATION,
-    'cloudwatch': DEFAULT_PORT_CLOUDWATCH
+    'cloudwatch': DEFAULT_PORT_CLOUDWATCH,
+    'ssm': DEFAULT_PORT_SSM
 }
 
 # host to bind to when starting the services
@@ -97,7 +98,7 @@ APPLICATION_AMZ_JSON_1_1 = 'application/x-amz-json-1.1'
 APPLICATION_JSON = 'application/json'
 
 # Lambda defaults
-LAMBDA_TEST_ROLE = "arn:aws:iam::%s:role/lambda-test-role" % TEST_AWS_ACCOUNT_ID
+LAMBDA_TEST_ROLE = 'arn:aws:iam::%s:role/lambda-test-role' % TEST_AWS_ACCOUNT_ID
 
 # installation constants
 ELASTICSEARCH_JAR_URL = 'https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.3.0.zip'

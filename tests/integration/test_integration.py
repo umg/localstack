@@ -1,16 +1,10 @@
-import os
-import sys
 import json
 import time
-import base64
 import logging
 from datetime import datetime, timedelta
-from docopt import docopt
 from nose.tools import assert_raises
 from localstack.utils import testutil
-from localstack.utils.common import *
-from localstack.constants import LAMBDA_TEST_ROLE, LOCALSTACK_ROOT_FOLDER
-from localstack.services import infra
+from localstack.utils.common import load_file, short_uid, clone, to_bytes, to_str, run_safe
 from localstack.services.awslambda.lambda_api import LAMBDA_RUNTIME_PYTHON27
 from localstack.utils.kinesis import kinesis_connector
 from localstack.utils.aws import aws_stack
@@ -56,6 +50,7 @@ def test_firehose_s3():
             'Prefix': s3_prefix
         }
     )
+    assert stream
     assert TEST_FIREHOSE_NAME in firehose.list_delivery_streams()['DeliveryStreamNames']
     # create target S3 bucket
     s3_resource.create_bucket(Bucket=TEST_BUCKET_NAME)
@@ -95,7 +90,7 @@ def test_kinesis_lambda_sns_ddb_streams():
     kinesis_connector.listen_to_kinesis(TEST_STREAM_NAME, listener_func=process_records,
         wait_until_started=True, ddb_lease_table_suffix=ddb_lease_table_suffix)
 
-    LOGGER.info("Kinesis consumer initialized.")
+    LOGGER.info('Kinesis consumer initialized.')
 
     # create table with stream forwarding config
     testutil.create_dynamodb_table(TEST_TABLE_NAME, partition_key=PARTITION_KEY,
@@ -168,7 +163,7 @@ def test_kinesis_lambda_sns_ddb_streams():
         shard_id='shardId-000000000000', count=10)
     assert len(latest) == 10
 
-    LOGGER.info("Waiting some time before finishing test.")
+    LOGGER.info('Waiting some time before finishing test.')
     time.sleep(2)
 
     num_events = num_events_ddb + num_events_kinesis + num_events_sns

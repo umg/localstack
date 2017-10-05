@@ -2,11 +2,13 @@ import re
 import os
 import json
 import logging
-import base64
-import datetime
+import socket
 import tempfile
-from localstack.utils.common import *
-from localstack.utils.aws.aws_models import *
+from localstack.utils.common import (short_uid, parallelize, is_port_open,
+    rm_rf, unzip, download, clean_cache, mktime, load_file, mkdir, run, md5)
+from localstack.utils.aws.aws_models import (ElasticSearch, S3Notification,
+    EventSource, DynamoDB, DynamoDBStream, FirehoseStream, S3Bucket, SqsQueue,
+    KinesisShard, KinesisStream, LambdaFunction)
 from localstack.utils.aws import aws_stack
 from localstack.constants import REGION_LOCAL, DEFAULT_REGION
 from six import iteritems
@@ -108,7 +110,7 @@ def get_kinesis_streams(filter='.*', pool={}, env=None):
                 pool[arn] = stream
                 stream.shards = get_kinesis_shards(stream_details=details, env=env)
                 result.append(stream)
-    except socket.error as e:
+    except socket.error:
         pass
     return result
 
@@ -141,7 +143,7 @@ def get_sqs_queues(filter='.*', pool={}, env=None):
             if re.match(filter, name):
                 queue = SqsQueue(arn)
                 result.append(queue)
-    except socket.error as e:
+    except socket.error:
         pass
     return result
 
@@ -150,7 +152,7 @@ def get_sqs_queues(filter='.*', pool={}, env=None):
 def resolve_string_or_variable(string, code_map):
     if re.match(r'^["\'].*["\']$', string):
         return string.replace('"', '').replace("'", '')
-    LOG.warning("Variable resolution not implemented")
+    LOG.warning('Variable resolution not implemented')
     return None
 
 
@@ -218,14 +220,14 @@ def get_lambda_functions(filter='.*', details=False, pool={}, env=None):
                 try:
                     code_map = get_lambda_code(func_name, env=env)
                     f.targets = extract_endpoints(code_map, pool)
-                except Exception as e:
+                except Exception:
                     LOG.warning("Unable to get code for lambda '%s'" % func_name)
 
     try:
         out = cmd_lambda('list-functions', env)
         out = json.loads(out)
         parallelize(handle, out['Functions'])
-    except socket.error as e:
+    except socket.error:
         pass
     return result
 
@@ -259,16 +261,17 @@ def get_lambda_code(func_name, retries=1, cache_time=None, env=None):
     try:
         mkdir(folder)
         if not os.path.isfile(archive):
-            download(loc, archive)
+            download(loc, archive, verify_ssl=False)
         if len(os.listdir(folder)) <= 1:
-            run("cd %s && unzip -o %s" % (folder, filename))
+            zip_path = os.path.join(folder, filename)
+            unzip(zip_path, folder)
     except Exception as e:
-        print("WARN: %s" % e)
+        print('WARN: %s' % e)
         rm_rf(archive)
         if retries > 0:
             return get_lambda_code(func_name, retries=retries - 1, cache_time=1, env=env)
         else:
-            print("WARNING: Unable to retrieve lambda code: %s" % e)
+            print('WARNING: Unable to retrieve lambda code: %s' % e)
 
     # traverse subdirectories and get script sources
     result = {}
@@ -284,6 +287,8 @@ def get_lambda_code(func_name, retries=1, cache_time=None, env=None):
     clean_cache(file_pattern=TMP_DOWNLOAD_FILE_PATTERN,
         last_clean_time=last_cache_cleanup_time,
         max_age=TMP_DOWNLOAD_CACHE_MAX_AGE)
+    # TODO: delete only if cache_time is over
+    rm_rf(folder)
 
     return result
 
@@ -305,7 +310,7 @@ def get_elasticsearch_domains(filter='.*', pool={}, env=None):
                 result.append(es)
                 pool[arn] = es
         parallelize(handle, out['DomainNames'])
-    except socket.error as e:
+    except socket.error:
         pass
 
     return result
@@ -329,7 +334,7 @@ def get_dynamo_dbs(filter='.*', pool={}, env=None):
                 result.append(db)
                 pool[arn] = db
         parallelize(handle, out['TableNames'])
-    except socket.error as e:
+    except socket.error:
         pass
     return result
 
@@ -346,7 +351,7 @@ def get_s3_buckets(filter='.*', pool={}, details=False, env=None):
             pool[arn] = bucket
             if details:
                 try:
-                    out = cmd_s3api('get-bucket-notification --bucket %s' % bucket_name, env=env)
+                    out = cmd_s3api('get-bucket-notification-configuration --bucket %s' % bucket_name, env=env)
                     if out:
                         out = json.loads(out)
                         if 'CloudFunctionConfiguration' in out:
@@ -356,13 +361,13 @@ def get_s3_buckets(filter='.*', pool={}, details=False, env=None):
                             n.target = func
                             bucket.notifications.append(n)
                 except Exception as e:
-                    print("WARNING: Unable to get details for bucket: %s" % e)
+                    print('WARNING: Unable to get details for bucket: %s' % e)
 
     try:
         out = cmd_s3api('list-buckets', env)
         out = json.loads(out)
         parallelize(handle, out['Buckets'])
-    except socket.error as e:
+    except socket.error:
         pass
     return result
 
@@ -381,10 +386,10 @@ def get_firehose_streams(filter='.*', pool={}, env=None):
                 s = FirehoseStream(arn)
                 for dest in details['Destinations']:
                     dest_s3 = dest['S3DestinationDescription']['BucketARN']
-                    bucket = func = EventSource.get(dest_s3, pool=pool)
+                    bucket = EventSource.get(dest_s3, pool=pool)
                     s.destinations.append(bucket)
                 result.append(s)
-    except socket.error as e:
+    except socket.error:
         pass
     return result
 
@@ -398,7 +403,6 @@ def read_kinesis_iterator(shard_iterator, max_results=10, env=None):
 
 
 def get_kinesis_events(stream_name, shard_id, max_results=10, env=None):
-    timestamp = now() - KINESIS_RECENT_EVENTS_TIME_DIFF_SECS
     env = aws_stack.get_environment(env)
     records = aws_stack.kinesis_get_latest_records(stream_name, shard_id, count=max_results, env=env)
     for r in records:

@@ -18,7 +18,6 @@ ACTION_DELETE_STREAM = '%s.DeleteStream' % ACTION_PREFIX
 class ProxyListenerKinesis(ProxyListener):
 
     def forward_request(self, method, path, data, headers):
-        action = headers.get('X-Amz-Target')
         if random.random() < config.KINESIS_ERROR_PROBABILITY:
             return kinesis_error_response(data)
         return True
@@ -65,11 +64,11 @@ UPDATE_KINESIS = ProxyListenerKinesis()
 def kinesis_error_response(data):
     error_response = Response()
     error_response.status_code = 200
-    content = {"FailedRecordCount": 1, "Records": []}
-    for record in data["Records"]:
-        content["Records"].append({
-            "ErrorCode": "ProvisionedThroughputExceededException",
-            "ErrorMessage": "Rate exceeded for shard X in stream Y under account Z."
+    content = {'FailedRecordCount': 1, 'Records': []}
+    for record in data['Records']:
+        content['Records'].append({
+            'ErrorCode': 'ProvisionedThroughputExceededException',
+            'ErrorMessage': 'Rate exceeded for shard X in stream Y under account Z.'
         })
     error_response._content = json.dumps(content)
     return error_response

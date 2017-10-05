@@ -1,15 +1,15 @@
 import os
+import re
 import boto3
 import json
 import base64
 import logging
-import re
 from six import iteritems
-from threading import Timer
 from localstack import config
-from localstack.constants import *
-from localstack.utils.common import *
-from localstack.utils.aws.aws_models import *
+from localstack.constants import (REGION_LOCAL, DEFAULT_REGION,
+    ENV_DEV, APPLICATION_AMZ_JSON_1_1, APPLICATION_AMZ_JSON_1_0)
+from localstack.utils.common import run_safe, to_str, is_string, make_http_request, timestamp
+from localstack.utils.aws.aws_models import KinesisStream
 
 # AWS environment variable names
 ENV_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
@@ -120,7 +120,6 @@ def get_boto3_credentials():
 
 
 def get_boto3_session():
-    my_session = None
     if CUSTOM_BOTO3_SESSION:
         return CUSTOM_BOTO3_SESSION
     if CREATE_NEW_SESSION_PER_BOTO3_CONNECTION:
@@ -218,7 +217,7 @@ def get_account_id(account_id=None, env=None):
 def role_arn(role_name, account_id=None, env=None):
     env = get_environment(env)
     account_id = get_account_id(account_id, env=env)
-    return "arn:aws:iam::%s:role/%s" % (account_id, role_name)
+    return 'arn:aws:iam::%s:role/%s' % (account_id, role_name)
 
 
 def iam_resource_arn(resource, role=None, env=None):
@@ -235,12 +234,12 @@ def get_iam_role(resource, env=None):
 
 def dynamodb_table_arn(table_name, account_id=None):
     account_id = get_account_id(account_id)
-    return "arn:aws:dynamodb:%s:%s:table/%s" % (DEFAULT_REGION, account_id, table_name)
+    return 'arn:aws:dynamodb:%s:%s:table/%s' % (DEFAULT_REGION, account_id, table_name)
 
 
 def dynamodb_stream_arn(table_name, account_id=None):
     account_id = get_account_id(account_id)
-    return ("arn:aws:dynamodb:%s:%s:table/%s/stream/%s" %
+    return ('arn:aws:dynamodb:%s:%s:table/%s/stream/%s' %
         (DEFAULT_REGION, account_id, table_name, timestamp()))
 
 
@@ -248,7 +247,7 @@ def lambda_function_arn(function_name, account_id=None):
     pattern = 'arn:aws:lambda:.*:.*:function:.*'
     if re.match(pattern, function_name):
         return function_name
-    if len(function_name.split(':')) > 1:
+    if ':' in function_name:
         raise Exception('Lambda function name should not contain a colon ":"')
     account_id = get_account_id(account_id)
     return pattern.replace('.*', '%s') % (DEFAULT_REGION, account_id, function_name)
@@ -261,26 +260,26 @@ def cognito_user_pool_arn(user_pool_id, account_id=None):
 
 def kinesis_stream_arn(stream_name, account_id=None):
     account_id = get_account_id(account_id)
-    return "arn:aws:kinesis:%s:%s:stream/%s" % (DEFAULT_REGION, account_id, stream_name)
+    return 'arn:aws:kinesis:%s:%s:stream/%s' % (DEFAULT_REGION, account_id, stream_name)
 
 
 def firehose_stream_arn(stream_name, account_id=None):
     account_id = get_account_id(account_id)
-    return ("arn:aws:firehose:%s:%s:deliverystream/%s" % (DEFAULT_REGION, account_id, stream_name))
+    return ('arn:aws:firehose:%s:%s:deliverystream/%s' % (DEFAULT_REGION, account_id, stream_name))
 
 
 def s3_bucket_arn(bucket_name, account_id=None):
-    return "arn:aws:s3:::%s" % (bucket_name)
+    return 'arn:aws:s3:::%s' % (bucket_name)
 
 
 def sqs_queue_arn(queue_name, account_id=None):
     account_id = get_account_id(account_id)
-    return ("arn:aws:sqs:%s:%s:%s" % (DEFAULT_REGION, account_id, queue_name))
+    return ('arn:aws:sqs:%s:%s:%s' % (DEFAULT_REGION, account_id, queue_name))
 
 
 def sns_topic_arn(topic_name, account_id=None):
     account_id = get_account_id(account_id)
-    return ("arn:aws:sns:%s:%s:%s" % (DEFAULT_REGION, account_id, topic_name))
+    return ('arn:aws:sns:%s:%s:%s' % (DEFAULT_REGION, account_id, topic_name))
 
 
 def get_sqs_queue_url(queue_name):
@@ -348,7 +347,7 @@ def get_apigateway_resource_for_path(api_id, path, parent=None, resources=None):
 def get_apigateway_path_for_resource(api_id, resource_id, path_suffix='', resources=None):
     if resources is None:
         apigateway = connect_to_service(service_name='apigateway')
-        resources = apigateway.get_resources(restApiId=api_id, limit=100)
+        resources = apigateway.get_resources(restApiId=api_id, limit=100)['items']
     target_resource = list(filter(lambda res: res['id'] == resource_id, resources))[0]
     path_part = target_resource.get('pathPart', '')
     if path_suffix:
@@ -382,12 +381,14 @@ def create_api_gateway(name, description=None, resources=None, stage_name=None,
     root_res_id = resources_list['items'][0]['id']
     # add API resources and methods
     for path, methods in iteritems(resources):
-        if '/' in path:
-            raise Exception('Currently only works for root-level resources.')
-        api_resource = client.create_resource(restApiId=api_id, parentId=root_res_id, pathPart=path)
+        # create resources recursively
+        parent_id = root_res_id
+        for path_part in path.split('/'):
+            api_resource = client.create_resource(restApiId=api_id, parentId=parent_id, pathPart=path_part)
+            parent_id = api_resource['id']
         # add methods to the API resource
         for method in methods:
-            api_method = client.put_method(
+            client.put_method(
                 restApiId=api_id,
                 resourceId=api_resource['id'],
                 httpMethod=method['httpMethod'],
@@ -398,7 +399,7 @@ def create_api_gateway(name, description=None, resources=None, stage_name=None,
             integrations = method['integrations']
             create_api_gateway_integrations(api_id, api_resource['id'], method, integrations, env=env)
     # deploy the API gateway
-    api_deployed = client.create_deployment(restApiId=api_id, stageName=stage_name)
+    client.create_deployment(restApiId=api_id, stageName=stage_name)
     return api
 
 
@@ -411,7 +412,7 @@ def create_api_gateway_integrations(api_id, resource_id, method, integrations=[]
         client_error_code = integration.get('clientErrorCode') or '400'
         server_error_code = integration.get('serverErrorCode') or '500'
         # create integration
-        response = client.put_integration(
+        client.put_integration(
             restApiId=api_id,
             resourceId=resource_id,
             httpMethod=method['httpMethod'],
@@ -428,7 +429,7 @@ def create_api_gateway_integrations(api_id, resource_id, method, integrations=[]
         # create response configs
         for response_config in response_configs:
             # create integration response
-            response = client.put_integration_response(
+            client.put_integration_response(
                 restApiId=api_id,
                 resourceId=resource_id,
                 httpMethod=method['httpMethod'],
@@ -437,7 +438,7 @@ def create_api_gateway_integrations(api_id, resource_id, method, integrations=[]
                 selectionPattern=response_config['pattern']
             )
             # create method response
-            response = client.put_method_response(
+            client.put_method_response(
                 restApiId=api_id,
                 resourceId=resource_id,
                 httpMethod=method['httpMethod'],
@@ -514,7 +515,7 @@ def kinesis_get_latest_records(stream_name, shard_id, count=10, env=None):
         for record in records:
             try:
                 record['Data'] = to_str(record['Data'])
-            except Exception as e:
+            except Exception:
                 pass
         result.extend(records)
         shard_iterator = records_response['NextShardIterator'] if records else False
